@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sonar Profile</title>
+  <style>
+    :root {
+      --bg: #2d2d2d;
+      --fg: #d8d8d8;
+      --muted: #9a9a9a;
+      --field: #3d3d3d;
+      --field-border: #4a4a4a;
+      --accent: #f97316;
+      --ok: #5fb760;
+      --err: #e05252;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font: 9pt "Segoe UI", system-ui, sans-serif;
+    }
+    body { padding: 6px 12px 12px 0; }
+    .item {
+      display: grid;
+      grid-template-columns: 96px 1fr;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0;
+      min-height: 26px;
+    }
+    .item > label:first-child { text-align: right; color: var(--fg); }
+    .channel { padding: 2px 0 4px; border-top: 1px solid #383838; }
+    .channel .item { margin: 2px 0; }
+    select, button {
+      width: 100%;
+      min-height: 26px;
+      background: var(--field);
+      color: var(--fg);
+      border: 1px solid var(--field-border);
+      border-radius: 3px;
+      font: inherit;
+      padding: 0 6px;
+    }
+    select:focus, button:focus { outline: 1px solid var(--accent); }
+    button { cursor: pointer; }
+    button:hover { background: #474747; }
+    input[type="checkbox"] { margin: 0; accent-color: var(--accent); width: 14px; height: 14px; flex: none; }
+    .check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .ctl { display: grid; grid-template-columns: 28px 1fr 34px; gap: 8px; align-items: center; }
+    .ctl input[type="range"] { width: 100%; margin: 0; accent-color: var(--accent); }
+    .ctl input[type="range"]:disabled { opacity: 0.3; }
+    .ctl .pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+    button.mute-btn {
+      width: 28px;
+      height: 24px;
+      min-height: 0;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+    }
+    button.mute-btn svg { width: 16px; height: 16px; }
+    button.mute-btn.unmute { color: var(--ok); border-color: var(--ok); }
+    button.mute-btn.mute { color: var(--err); border-color: var(--err); }
+    .hint { color: var(--muted); font-size: 8pt; line-height: 1.35; }
+    .status { margin: 2px 0 0 0; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    .hidden { display: none !important; }
+    .buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  </style>
+  <script src="i18n.js"></script>
+</head>
+<body>
+  <div class="item">
+    <label>Sonar</label>
+    <div>
+      <div id="status" class="status" data-i18n="status.connecting"></div>
+      <div id="lastError" class="status err hidden"></div>
+    </div>
+  </div>
+
+  <div class="item">
+    <span></span>
+    <label class="check"><input type="checkbox" id="sameOutput" /> <span data-i18n="same"></span></label>
+  </div>
+
+  <div id="channels"></div>
+
+  <div class="item">
+    <span></span>
+    <div class="buttons">
+      <button id="refresh" type="button" data-i18n="tools.refresh"></button>
+      <button id="takeCurrent" type="button" data-i18n="tools.takeCurrent"></button>
+    </div>
+  </div>
+  <div class="item">
+    <span></span>
+    <div class="hint" data-i18n="tools.hint"></div>
+  </div>
+
+  <script>
+    const OUT = ['game', 'chat', 'media', 'aux'];
+
+    // Rows of the inspector. "same" limits a row to one output mode:
+    // true = only with sameOutput, false = only without, undefined = always.
+    const ROWS = [
+      { key: 'master' },
+      { key: 'all', select: 'output', flow: 'output', same: true },
+      ...OUT.map((ch) => ({ key: ch, select: 'out_' + ch, flow: 'output', same: false })),
+      { key: 'mic', select: 'mic', flow: 'input' },
+    ];
+    const SELECTS = ROWS.filter((r) => r.select).map((r) => r.select);
+    const ICON_SPEAKER = '<path d="M3 9v6h4l5 4V5L7 9H3z" fill="currentColor"/>';
+    const MUTE_ICONS = {
+      unmute: ICON_SPEAKER + '<path d="M15.5 8.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+      mute: ICON_SPEAKER + '<path d="M16 9.5l5 5M21 9.5l-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    let ws = null;
+    let uuid = null;
+    let action = null;
+    let settings = {};
+    let data = { outputs: [], inputs: [] };
+
+    // Each channel: optional device line, then mute button + volume line.
+    function buildRows() {
+      const html = ROWS.map((r) => {
+        const label = '<label data-i18n="channel.' + r.key + '"></label>';
+        const device = r.select
+          ? '<div class="item">' + label + '<select id="' + r.select + '" data-flow="' + r.flow + '"></select></div>'
+          : '';
+        const controls =
+          '<div class="item ctl-line">' + (r.select ? '<span></span>' : label) +
+          '<div class="ctl">' +
+          '<button type="button" class="mute-btn" id="mute_' + r.key + '"></button>' +
+          '<input type="range" id="vol_' + r.key + '" min="0" max="100" step="1" />' +
+          '<span class="pct" id="volText_' + r.key + '"></span>' +
+          '</div></div>';
+        return '<div class="channel" id="row_' + r.key + '">' + device + controls + '</div>';
+      }).join('');
+      $('channels').innerHTML = html;
+    }
+
+    buildRows();
+    translatePage();
+
+    // Called by Stream Deck when the property inspector loads.
+    function connectElgatoStreamDeckSocket(port, inUuid, registerEvent, info, actionInfo) {
+      try {
+        setLanguage(JSON.parse(info).application.language);
+      } catch {}
+      translatePage();
+
+      uuid = inUuid;
+      const ai = JSON.parse(actionInfo);
+      action = ai.action;
+      settings = dropVolumeSwitches((ai.payload && ai.payload.settings) || {});
+
+      ws = new WebSocket('ws://127.0.0.1:' + port);
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ event: registerEvent, uuid }));
+        render();
+        requestDevices();
+      };
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.event === 'sendToPropertyInspector' && msg.payload && msg.payload.type === 'devices') {
+          data = msg.payload;
+          if (fillMissingVolumes()) saveSettings();
+          render();
+        } else if (msg.event === 'didReceiveSettings') {
+          settings = msg.payload.settings || {};
+          render();
+        }
+      };
+    }
+
+    function requestDevices() {
+      setStatus(t('status.loading'));
+      ws.send(JSON.stringify({ event: 'sendToPlugin', action, context: uuid, payload: { cmd: 'getDevices' } }));
+    }
+
+    function saveSettings() {
+      ws.send(JSON.stringify({ event: 'setSettings', context: uuid, payload: settings }));
+    }
+
+    function setStatus(text, cls) {
+      const el = $('status');
+      el.textContent = text;
+      el.className = 'status' + (cls ? ' ' + cls : '');
+    }
+
+    function fillSelect(sel, devices, value) {
+      sel.innerHTML = '';
+      sel.add(new Option(t('device.keep'), ''));
+      for (const d of devices) sel.add(new Option(d.name + (d.active ? '' : ' ' + t('device.inactive')), d.id));
+      if (value && !devices.some((d) => d.id === value)) {
+        const name = (settings.names && settings.names[value]) || value;
+        sel.add(new Option(name + ' ' + t('device.unavailable'), value));
+      }
+      sel.value = value || '';
+    }
+
+    // Same conversion as the plugin's migrateVolumeSwitches: in pre-release versions each slider
+    // had a "change volume" checkbox; a switched-off slider loses its value.
+    function dropVolumeSwitches(s) {
+      const n = { ...s };
+      for (const key of Object.keys(s)) {
+        if (!key.startsWith('volOn_')) continue;
+        if (!s[key]) delete n[key.replace('volOn_', 'vol_')];
+        delete n[key];
+      }
+      return n;
+    }
+
+    // Volume of a row in Sonar right now, in percent ("all" follows Game).
+    function currentPercent(key) {
+      const vol = data.current && data.current.volume;
+      if (!vol) return undefined;
+      const v = vol[key === 'all' ? 'game' : key];
+      return v === undefined ? undefined : Math.round(v * 100);
+    }
+
+    // Volumes are always applied, so a row without a value yet starts at
+    // Sonar's current volume instead of jumping to some default.
+    function fillMissingVolumes() {
+      let changed = false;
+      for (const r of ROWS) {
+        const key = 'vol_' + r.key;
+        if (settings[key] !== undefined && settings[key] !== '') continue;
+        const pct = currentPercent(r.key);
+        if (pct === undefined) continue;
+        settings[key] = pct;
+        changed = true;
+      }
+      return changed;
+    }
+
+    function volumeValue(key) {
+      const v = settings['vol_' + key];
+      if (v !== undefined && v !== '') return Number(v);
+      const pct = currentPercent(key);
+      return pct === undefined ? 100 : pct;
+    }
+
+    function render() {
+      const same = settings.sameOutput !== false;
+      $('sameOutput').checked = same;
+
+      for (const r of ROWS) {
+        $('row_' + r.key).classList.toggle('hidden', r.same !== undefined && r.same !== same);
+
+        if (r.select) fillSelect($(r.select), r.flow === 'input' ? data.inputs : data.outputs, settings[r.select]);
+
+        // Unmuted unless explicitly set to mute.
+        const m = settings['mute_' + r.key] === 'mute' ? 'mute' : 'unmute';
+        const btn = $('mute_' + r.key);
+        btn.className = 'mute-btn ' + m;
+        btn.innerHTML = '<svg viewBox="0 0 24 24">' + MUTE_ICONS[m] + '</svg>';
+        btn.title = t('mute.' + m);
+
+        $('vol_' + r.key).value = volumeValue(r.key);
+        $('volText_' + r.key).textContent = volumeValue(r.key) + '%';
+      }
+
+      if (data.error) setStatus(translateError(data.error), 'err');
+      else if (data.mode) setStatus(t('status.connected'), 'ok');
+
+      const last = data.lastError;
+      $('lastError').classList.toggle('hidden', !last);
+      $('lastError').textContent = last ? t('lastError', { message: translateError(last) }) : '';
+    }
+
+    // Keep id -> name for every selected device so the plugin can find it again
+    // if Windows ever hands out a new id for the same device.
+    function rememberNames() {
+      const all = [...data.outputs, ...data.inputs];
+      const names = {};
+      for (const id of SELECTS) {
+        const v = settings[id];
+        if (!v) continue;
+        const d = all.find((x) => x.id === v);
+        names[v] = d ? d.name : (settings.names && settings.names[v]) || v;
+      }
+      settings.names = names;
+    }
+
+    function update() {
+      rememberNames();
+      saveSettings();
+      render();
+    }
+
+    $('sameOutput').addEventListener('change', (e) => {
+      settings.sameOutput = e.target.checked;
+      update();
+    });
+    for (const r of ROWS) {
+      if (r.select) {
+        $(r.select).addEventListener('change', (e) => {
+          settings[r.select] = e.target.value;
+          update();
+        });
+      }
+      $('mute_' + r.key).addEventListener('click', () => {
+        settings['mute_' + r.key] = settings['mute_' + r.key] === 'mute' ? 'unmute' : 'mute';
+        update();
+      });
+      // Update the label while dragging, save once the slider is released.
+      $('vol_' + r.key).addEventListener('input', (e) => {
+        $('volText_' + r.key).textContent = e.target.value + '%';
+      });
+      $('vol_' + r.key).addEventListener('change', (e) => {
+        settings['vol_' + r.key] = Number(e.target.value);
+        update();
+      });
+    }
+    $('refresh').addEventListener('click', requestDevices);
+
+    $('takeCurrent').addEventListener('click', () => {
+      const cur = data.current;
+      if (!cur) return;
+      const pct = (ch) => Math.round((cur.volume && cur.volume[ch] !== undefined ? cur.volume[ch] : 1) * 100);
+      const muteOf = (ch) => (cur.mute[ch] ? 'mute' : 'unmute');
+      const setRow = (row, ch) => {
+        settings['mute_' + row] = muteOf(ch);
+        settings['vol_' + row] = pct(ch);
+      };
+
+      const outs = OUT.map((ch) => cur.devices[ch] || '');
+      // The microphone always has its own row, so only the outputs need to match.
+      const uniform =
+        outs.every((v) => v === outs[0]) &&
+        OUT.every((ch) => muteOf(ch) === muteOf('game') && pct(ch) === pct('game'));
+
+      settings.sameOutput = uniform;
+      settings.output = uniform ? outs[0] : '';
+      OUT.forEach((ch, i) => (settings['out_' + ch] = uniform ? '' : outs[i]));
+      settings.mic = cur.devices.mic || '';
+      setRow('master', 'master');
+      if (uniform) setRow('all', 'game');
+      else for (const ch of OUT) setRow(ch, ch);
+      setRow('mic', 'mic');
+      update();
+    });
+  </script>
+</body>
+</html>

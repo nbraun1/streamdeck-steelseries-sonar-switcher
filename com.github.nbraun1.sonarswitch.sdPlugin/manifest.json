@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Name": "Sonar Device Switcher",
+  "Version": "1.0.0.0",
+  "Author": "nbraun1",
+  "Description": "Switch the output and input devices of SteelSeries GG Sonar channels with one key press and set their volume and mute state.",
+  "UUID": "com.github.nbraun1.sonarswitch",
+  "URL": "https://github.com/nbraun1/streamdeck-steelseries-sonar-switcher",
+  "Icon": "imgs/plugin/marketplace",
+  "Category": "Sonar Switcher",
+  "CategoryIcon": "imgs/plugin/category",
+  "CodePath": "bin/plugin.js",
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "6.5"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "disabled"
+  },
+  "Actions": [
+    {
+      "Name": "Apply Sonar Profile",
+      "UUID": "com.github.nbraun1.sonarswitch.profile",
+      "Icon": "imgs/actions/profile/icon",
+      "Tooltip": "Sets devices and mute state of the Sonar channels",
+      "PropertyInspectorPath": "ui/profile.html",
+      "Controllers": ["Keypad"],
+      "DisableAutomaticStates": true,
+      "SupportedInMultiActions": true,
+      "States": [
+        {
+          "Image": "imgs/actions/profile/key",
+          "TitleAlignment": "bottom"
+        },
+        {
+          "Image": "imgs/actions/profile/key-active",
+          "TitleAlignment": "bottom"
+        }
+      ]
+    }
+  ]
+}

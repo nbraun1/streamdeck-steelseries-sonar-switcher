@@ -1,0 +1,9 @@
+{
+  "Name": "Sonar Device Switcher",
+  "Description": "Schaltet die Ausgabe- und Eingabegeräte der SteelSeries GG Sonar Kanäle per Tastendruck um und setzt Lautstärke und Stummschaltung.",
+  "Category": "Sonar Switcher",
+  "com.github.nbraun1.sonarswitch.profile": {
+    "Name": "Sonar-Profil anwenden",
+    "Tooltip": "Setzt Geräte und Stummschaltung der Sonar-Kanäle"
+  }
+}

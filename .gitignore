@@ -1,0 +1,3 @@
+dist/
+*.streamDeckPlugin
+com.github.nbraun1.sonarswitch.sdPlugin/logs/
